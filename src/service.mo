@@ -68,6 +68,7 @@ module {
     #GenericError : GenericError;
     //validated
     #Exists : Nat; //The publication already exists and this is its number
+    #GenericBatchError : Text;
   };
 
   public type PublicationRegistration = {
@@ -97,6 +98,7 @@ module {
     #ImproperConfig : Text; //maybe implementation specific
     #GenericError : GenericError;
     #NotFound;
+    #GenericBatchError : Text;
   };
 
   public type PublicationUpdateResult = ?{
@@ -122,6 +124,7 @@ module {
     #PublicationNotFound;
     //validated
     #Exists : Nat; //The subscription already exists and this is its number
+    #GenericBatchError : Text;
   };
 
   public type SubscriptionUpdateRequest = {
@@ -139,6 +142,7 @@ module {
     #ImproperConfig : Text; //maybe implementation specific
     #GenericError : GenericError;
     #NotFound;
+    #GenericBatchError : Text;
   };
 
   public type SubscriptionUpdateResult = ?{
@@ -146,13 +150,13 @@ module {
      #Err: SubscriptionUpdateError;
   };
 
-  public type Stats = [ICRC16Map];
+  public type Stats = ICRC16Map;
 
 
     public type PublicationInfo = {
       namespace: Text;
       publicationId: Nat;
-      config: [ICRC16Map];
+      config: ICRC16Map;
       stats: Stats;
     };
 
@@ -166,33 +170,78 @@ module {
       publisher: Principal;
       namespace: Text;
       publicationId: Nat;
-      config: [ICRC16Map];
+      config: ICRC16Map;
       stats: Stats;
     };
 
   public type SubscriberSubscriptionInfo = {
     subscriptionId : Nat;
     subscriber: Principal;
-    config: [ICRC16Map];
+    config: ICRC16Map;
     stats: Stats;
   };
-
-
   public type SubscriptionInfo = {
     subscriptionId: Nat;
     namespace: Text;
-    config: [ICRC16Map];
+    config: ICRC16Map;
     stats: Stats;
   };
 
   public type SubscriberInfo = {
     subscriber: Principal;
+    config: ICRC16Map;
+    subscriptions: ?[Nat];
     stats: Stats;
   };
 
   public type BroadcasterInfo = {
     broadcaster: Principal;
     stats: Stats;
+  };
+
+  public type ICRC75Item = {
+    principal: Principal;
+    namespace: Namespace
+  };
+
+  public type ValidBroadcastersResponse = {
+    #list: [Principal];
+    #icrc75: ICRC75Item;
+  };
+
+  public type StatisticsFilter = ??[Text];
+
+  public type OrchestrationQuerySlice = {
+    #ByPublisher: Principal;
+    #ByNamespace: Text;
+    #BySubscriber: Principal;
+    #ByBroadcaster: Principal;
+  };
+
+  public type OrchestrationFilter = {
+    statistics: StatisticsFilter;
+    slice: [OrchestrationQuerySlice];
+  };
+
+  public type Service = actor {
+    icrc72_register_subscription: ([SubscriptionRegistration]) -> async [SubscriptionRegisterResult];
+    icrc72_register_publication: ([PublicationRegistration]) -> async [PublicationRegisterResult];
+    icrc72_get_valid_broadcaster: () -> async ValidBroadcastersResponse;
+    icrc72_get_publications: ({
+      take: ?Nat;
+      prev: ?Nat;
+      filter: ?OrchestrationFilter;
+    }) -> async [PublicationInfo];
+    icrc72_get_subscriptions: ({
+      take: ?Nat;
+      prev: ?Nat;
+      filter: ?OrchestrationFilter;
+    }) -> async [SubscriptionInfo];
+    icrc72_get_subscribers: ({
+      take: ?Nat;
+      prev: ?Nat;
+      filter: ?OrchestrationFilter;
+    }) -> async [SubscriberInfo];
   };
   
   

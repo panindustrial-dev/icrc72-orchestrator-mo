@@ -1,12 +1,14 @@
 import Time "mo:base/Time";
 import Principal "mo:base/Principal";
 import Star "mo:star/star";
-import VectorLib "mo:vector/Class";
+import VectorLib "mo:vector";
 import BTreeLib "mo:stableheapbtreemap/BTree";
 import SetLib "mo:map/Set";
 import MapLib "mo:map/Map";
 import TT "../../../../timerTool/src";
 import Governance "../../Governance";
+import ICRC72PublisherTypes "../../../../icrc72-publisher.mo/src/migrations/types";
+import ICRC72Publisher "../../../../icrc72-publisher.mo/src/";
 // please do not import any types from your project outside migrations folder here
 // it can lead to bugs when you change those types later, because migration types should not be changed
 // you should also avoid importing these types anywhere in your project directly from here
@@ -21,6 +23,9 @@ module {
   public let Vector = VectorLib;
 
   public type Namespace = Text;
+
+  public let GovernanceTypes = Governance;
+
 
   public let governance : Governance.Service = actor(Governance.CANISTER_ID);
 
@@ -142,29 +147,30 @@ module {
 
     public type PublisherRecord = {
       broadcasters : Set.Set<Principal>; //canisterID
-      subnet: Principal;
+      var subnet: ?Principal;
     };
 
     public type BroadcasterRecord = {
       publishers : Map.Map<Principal, Set.Set<Text>>; //canisterID, Namespaces
       subscribers : Map.Map<Text, (Set.Set<Principal>, BTree.BTree<Nat, Principal>)>; //Namespace, (stake, principal)
-      relays : Map.Map<Text, (Map.Map<Principal,Set.Set<Principal>>, BTree.BTree<Nat, (Principal,Principal)>)>; //Namespace, Map<The Relay Principal, Targets>, BTree<Stake, (target, princpal)>
+      relays : Map.Map<Text, (Map.Map<Principal, Set.Set<Principal>>, BTree.BTree<Nat, (Principal,Principal)>)>; //Namespace, Map<The Relay Principal, Targets>, BTree<Stake, (target, princpal)>
       subnet: Principal;
     };
+
+    public type SubscriptionIndex = (Map.Map<Principal, Nat>, BTree.BTree<Nat,Nat>);
 
     public type SubscriptionRecord = {
       id: Nat;
       publicationId: Nat;
-      initialConfig: ICRC16Map;
       namespace: Text;
-      controllers: Set.Set<Principal>;
-      stakeIndex : BTree.BTree<Nat, Principal>;
       subscribers: Map.Map<Principal, SubscriberRecord>;
+      var stake: Nat;
+      controllers: Set.Set<Principal>;
+      initialConfig: ICRC16Map;
     };
 
     public type SubscriberRecord = {
       subscriptionId: Nat;
-      initialConfig: ICRC16Map;
       var stake: Nat;
       var filter: ?Text;
       var bActive: Bool;
@@ -192,6 +198,7 @@ module {
         #ImproperId : Text;
         #Busy; // This Broadcaster is busy at the moment and cannot process requests
         #GenericError : GenericError;
+        #GenericBatchError : Text;
     };
 
     public type GenericError = {
@@ -225,16 +232,16 @@ module {
             case (#Blob(v)) #Blob(v);
             case (#Bool(v)) #Bool(v);
             case (#Array(v)) {
-                let result = Vector.Vector<ICRC16>();
+                let result = Vector.new<ICRC16>();
                 for (item in v.vals()) {
-                    result.add(mapValueToICRC16(item));
+                    Vector.add(result,mapValueToICRC16(item));
                 };
                 #Array(Vector.toArray(result));
             };
             case (#Map(v)) {
-                let result = Vector.Vector<(Text, ICRC16)>();
+                let result = Vector.new<(Text, ICRC16)>();
                 for (item in v.vals()) {
-                    result.add((item.0, mapValueToICRC16(item.1)));
+                    Vector.add(result, (item.0, mapValueToICRC16(item.1)));
                 };
                 #Map(Vector.toArray(result));
             };
@@ -259,7 +266,7 @@ module {
     public type EventNotification = {
         id : Nat;
         eventId : Nat;
-        preEventId : ?Nat;
+        prevEventId : ?Nat;
         timestamp : Nat;
         namespace : Text;
         data : ICRC16;
@@ -284,7 +291,7 @@ module {
         offset : ?Nat;
     };
 
-    type SubscriptionConfig = [ICRC16Map];
+    type SubscriptionConfig = ICRC16Map;
 
     // type SubscriptionRegistration = {
     //     namespace : Text;
@@ -311,7 +318,7 @@ module {
         namespace : Text;
         config : SubscriptionConfig;
         memo : ?Blob;
-        stats : [ICRC16Map];
+        stats : ICRC16Map;
     };
 
     public type Permission = {
@@ -341,6 +348,7 @@ module {
       #ImproperConfig : Text; //maybe implementation specific
       #GenericError : GenericError;
       #NotFound;
+      #GenericBatchError : Text;
     };
 
     public type SubscriptionUpdateResult = ?{
@@ -360,6 +368,7 @@ module {
     #GenericError : GenericError;
     //validated
     #Exists : Nat; //The publication already exists and this is its number
+    #GenericBatchError : Text;
   };
 
   public type SubscriptionRegisterError = {
@@ -369,6 +378,7 @@ module {
     //validated
     #PublicationNotFound; //The publication does not exist
     #Exists : Nat; //The subscription already exists and this is its number
+    #GenericBatchError : Text;
   };
 
   /////////
@@ -416,6 +426,29 @@ module {
 
   ///MARK: Constants
   public let CONST = {
+    broadcasters = {
+      sys = "icrc72:broadcaster:sys:";
+      publisher = {
+        broadcasters = {
+          add = "icrc72:broadcaster:publisher:broadcaster:add";
+          remove = "icrc72:broadcaster:publisher:broadcaster:remove";
+        };
+        add = "icrc72:broadcaster:publisher:add";
+        remove = "icrc72:broadcaster:publisher:remove";
+      };
+      subscriber = {
+        add = "icrc72:broadcaster:subscriber:add";
+        remove = "icrc72:broadcaster:subscriber:remove";
+      };
+      relay = {
+        add = "icrc72:broadcaster:relay:add";
+        remove = "icrc72:broadcaster:relay:remove";
+      };
+      relayer = {
+        add = "icrc72:broadcaster:relayer:add";
+        remove = "icrc72:broadcaster:relayer:remove";
+      };
+    };
     subscription = {
       filter = "icrc72:subscription:filter";
       filter_update = "icrc72:subscription:filter:update";
@@ -460,6 +493,7 @@ module {
         };
       };
       subscribers = {
+        
         allowed = {
           list_add = "icrc72:publication:subscribers:allowed:list:add";
           list_remove = "icrc72:publication:subscribers:allowed:list:remove";
@@ -477,16 +511,43 @@ module {
           icrc75_update = "icrc72:publication:subscribers:disallowed:icrc75:update";
         };
       };
+      broadcasters = {
+        sys = "icrc72:broadcaster:sys:";
+        publisher = {
+          add = "icrc72:broadcaster:publisher:add";
+          remove = "icrc72:broadcaster:publisher:remove";
+        };
+        subscriber = {
+          add = "icrc72:broadcaster:subscriber:add";
+          remove = "icrc72:broadcaster:subscriber:remove";
+        };
+        relay = {
+          add = "icrc72:broadcaster:relay:add";
+          remove = "icrc72:broadcaster:relay:remove";
+        };
+        relayer = {
+          add = "icrc72:broadcaster:relayer:add";
+          remove = "icrc72:broadcaster:relayer:remove";
+        };
+      };
       created = "icrc72:publication:created";
     };
+    publishers = {
+      sys = "icrc72:publisher:sys:";
+    };
+    
+    subscribers = {
+      sys = "icrc72:subscriber:sys:";
+    }
   };
 
-  public type InitArgs ={
-    name: Text;
+  public type InitArgs = {
+    name : Text;
   };
   public type Environment = {
-    add_record: ?(([(Text, Value)], ?[(Text,Value)]) -> Nat);
+    addRecord: ?(([(Text, Value)], ?[(Text,Value)]) -> Nat);
     tt: TT.TimerTool;
+    icrc72Publisher : ICRC72Publisher.Publisher;
   };
 
   ///MARK: State
@@ -494,10 +555,10 @@ module {
     publications : BTree.BTree<Nat, PublicationRecord>;
     publicationsByNamespace : BTree.BTree<Text, Nat>;
     broadcasters : BTree.BTree<Principal, BroadcasterRecord>; //subnet, record
-    broadcastersBySubnet : Map.Map<Principal, Principal>; //subnet, broadcaster
+    broadcastersBySubnet : Map.Map<Principal, Vector.Vector<Principal>>; //subnet, broadcaster 
     subscribersByPrincipal : BTree.BTree<Principal, Set.Set<Nat>>; //principal, subscriptionID
     subscriptions: BTree.BTree<Nat, SubscriptionRecord>;
-    subscriptionsByNamespace : BTree.BTree<Text, Nat>;
+    subscriptionsByNamespace : BTree.BTree<Text, SubscriptionIndex>; //namespace, ((subscriber,subscription), (stake, subscription))
     var nextPublicationID : Nat;
     var nextSubscriptionID : Nat;
     var defaultTake : Nat;
