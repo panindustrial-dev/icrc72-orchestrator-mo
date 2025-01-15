@@ -1,3 +1,4 @@
+import Array "mo:base/Array";
 import Time "mo:base/Time";
 import Principal "mo:base/Principal";
 import Star "mo:star/star";
@@ -105,6 +106,14 @@ module {
     memo: ?Blob;
   };
 
+  public type PublicationDeleteRequest = {
+    publication : {
+      #namespace: Text;
+      #publicationId: Nat;
+    };
+    memo: ?Blob;
+  };
+
     public type PublicationInfo = {
         namespace : Text; // The namespace of the publication
         initialConfig: ICRC16Map; // Additional configuration or metadata about the publication
@@ -145,16 +154,85 @@ module {
         };
     };
 
+    public type PermissionSetShared = {
+        #allowed : [Principal];
+        #disallowed : [Principal];
+        #allowed_icrc75 : {
+          principal: Principal;
+          namespace: Namespace
+        };
+        #disallowed_icrc75 : {
+          principal: Principal;
+          namespace: Namespace
+        };
+    };
+
+    public func permissionSetToshared(p: ?PermissionSet) : ?PermissionSetShared {
+      switch (p) {
+        case (?#allowed(a)) {
+          ?#allowed(Set.toArray(a));
+        };
+        case (?#disallowed(a)) {
+          ?#disallowed(Set.toArray(a));
+        };
+        case (?#allowed_icrc75(a)) {
+          ?#allowed_icrc75(a);
+        };
+        case (?#disallowed_icrc75(a)) {
+          ?#disallowed_icrc75(a);
+        };
+        case(null) null;
+      };
+    };
+
     public type PublisherRecord = {
       broadcasters : Set.Set<Principal>; //canisterID
       var subnet: ?Principal;
     };
+
+    public type PublisherRecordShared = {
+      broadcasters : [Principal]; //canisterID
+      subnet: ?Principal;
+    };
+
+    public func publisherRecordToShared(x : PublisherRecord) : PublisherRecordShared {
+      {
+        broadcasters = Set.toArray(x.broadcasters);
+        subnet = x.subnet;
+      }
+    };
+
+
 
     public type BroadcasterRecord = {
       publishers : Map.Map<Principal, Set.Set<Text>>; //canisterID, Namespaces
       subscribers : Map.Map<Text, (Set.Set<Principal>, BTree.BTree<Nat, Principal>)>; //Namespace, (stake, principal)
       relays : Map.Map<Text, (Map.Map<Principal, Set.Set<Principal>>, BTree.BTree<Nat, (Principal,Principal)>)>; //Namespace, Map<The Relay Principal, Targets>, BTree<Stake, (target, princpal)>
       subnet: Principal;
+    };
+
+    public type BroadcasterRecordShared = {
+      publishers : [(Principal, [Text])]; //canisterID, Namespaces
+      subscribers : [(Text, ([Principal], [(Nat, Principal)]))]; //Namespace, (stake, principal)
+      relays : [(Text, ([(Principal, [Principal])], [(Nat, (Principal,Principal))]))]; //Namespace, Map<The Relay Principal, Targets>, BTree<Stake, (target, princpal)>
+      subnet: Principal;
+    };
+
+    public func broadcasterRecordToShared(x : BroadcasterRecord) : BroadcasterRecordShared {
+      {
+        publishers = Array.map<(Principal, Set.Set<Text>),(Principal, [Text])>(Map.toArray(x.publishers), func(entry){
+          (entry.0, Set.toArray(entry.1));
+        });
+        subscribers = Array.map<(Text, (Set.Set<Principal>, BTree.BTree<Nat, Principal>)),(Text, ([Principal], [(Nat, Principal)]))>(Map.toArray(x.subscribers), func(entry){
+          (entry.0, (Set.toArray(entry.1.0), BTree.toArray(entry.1.1)));
+        });
+        relays = Array.map<(Text, (Map.Map<Principal, Set.Set<Principal>>, BTree.BTree<Nat, (Principal,Principal)>)),(Text, ([(Principal, [Principal])], [(Nat, (Principal,Principal))]))>(Map.toArray(x.relays), func(entry){
+          (entry.0, (Array.map<(Principal, Set.Set<Principal>),(Principal, [Principal])>(Map.toArray(entry.1.0), func(entry){
+            (entry.0, Set.toArray(entry.1));
+          }), BTree.toArray(entry.1.1)));
+        });
+        subnet = x.subnet;
+      }
     };
 
     public type SubscriptionIndex = (Map.Map<Principal, Nat>, BTree.BTree<Nat,Nat>);
@@ -169,15 +247,63 @@ module {
       initialConfig: ICRC16Map;
     };
 
+    public type SubscriptionRecordShared = {
+      id: Nat;
+      publicationId: Nat;
+      namespace: Text;
+      subscribers: [(Principal, SubscriberRecordShared)];
+      stake: Nat;
+      controllers: [Principal];
+      initialConfig: ICRC16Map;
+    };
+
+    public func subscriptionRecordToShared(x : SubscriptionRecord) : SubscriptionRecordShared {
+      {
+        id = x.id;
+        publicationId = x.publicationId;
+        namespace = x.namespace;
+        subscribers = Array.map<(Principal, SubscriberRecord),(Principal, SubscriberRecordShared)>(Map.toArray(x.subscribers), func(entry){
+          (entry.0, subscriberRecordToShared(entry.1));
+        });
+        stake = x.stake;
+        controllers = Set.toArray(x.controllers);
+        initialConfig = x.initialConfig;
+      }
+    };
+
     public type SubscriberRecord = {
       subscriptionId: Nat;
       var stake: Nat;
       var filter: ?Text;
-      var bActive: Bool;
+      var bStopped: Bool;
       var skip: ?(Nat, Nat);
       subscriber: Principal;
       var subnet: ?Principal;
       registeredBroadcasters : Set.Set<Principal>; 
+    };
+
+    public type SubscriberRecordShared = {
+      subscriptionId: Nat;
+      stake: Nat;
+      filter: ?Text;
+      bStopped: Bool;
+      skip: ?(Nat, Nat);
+      subscriber: Principal;
+      subnet: ?Principal;
+      registeredBroadcasters : [Principal]; 
+    };
+
+    public func subscriberRecordToShared(x : SubscriberRecord) : SubscriberRecordShared {
+      {
+        subscriptionId = x.subscriptionId;
+        stake = x.stake;
+        filter = x.filter;
+        bStopped = x.bStopped;
+        skip = x.skip;
+        subscriber = x.subscriber;
+        subnet = x.subnet;
+        registeredBroadcasters = Set.toArray(x.registeredBroadcasters);
+      }
     };
 
 
@@ -191,6 +317,32 @@ module {
         registeredPublishers : Map.Map<Principal, PublisherRecord>; // Map of publishers registered and their assigned broadcasters
         subnetIndex: Map.Map<Principal, Principal>; //subnet, broadcaster
         controllers: Set.Set<Principal>;
+    };
+
+    public type PublicationRecordShared = {
+        id : Nat; // Unique identifier for the publication
+        namespace : Text; // The namespace of the publication
+        initialConfig: ICRC16Map; // Additional configuration or metadata about the publication
+        allowedPublishers : ?PermissionSetShared; // List of publishers allowed to publish under this namespace
+        allowedSubscribers : ?PermissionSetShared; // List of subscribers allowed to subscribe to this namespace
+        registeredPublishers : [(Principal, PublisherRecordShared)]; // Map of publishers registered and their assigned broadcasters
+        subnetIndex: [(Principal, Principal)]; //subnet, broadcaster
+        controllers: [Principal];
+    };
+
+    public func publicationRecordToShared(x : PublicationRecord) : PublicationRecordShared{
+      {
+        id = x.id;
+        namespace = x.namespace;
+        initialConfig = x.initialConfig;
+        allowedPublishers = permissionSetToshared(x.allowedPublishers);
+        allowedSubscribers = permissionSetToshared(x.allowedPublishers);
+        registeredPublishers = Array.map<(Principal, PublisherRecord),(Principal,PublisherRecordShared)>(Map.toArray(x.registeredPublishers), func(entry){
+          (entry.0, publisherRecordToShared(entry.1));
+        });
+        subnetIndex = Map.toArray(x.subnetIndex);
+        controllers = Set.toArray(x.controllers);
+      }
     };
 
     public type PublishError = {
@@ -216,7 +368,7 @@ module {
     public type SubscriptionInfo = {
         namespace : Text; // The namespace of the subscription
         subscriber : Principal; // Principal ID of the subscriber
-        active : Bool; // Indicates whether the subscription is currently active
+        bStopped : Bool; // Indicates whether the subscription is currently active
         filters : [Text]; // Currently active filters for this subscription
         messagesReceived : Nat; // Total number of messages received under this subscription
         messagesRequested : Nat; // Number of messages explicitly requested or queried by the subscriber
@@ -364,6 +516,7 @@ module {
     #UnauthorizedPublisher : {
       namespace : Namespace; //The publisher is not allowed, Look up config by message: Text;
     };
+    #NotFound; //The publication does not exist
     #ImproperConfig : Text; //maybe implementation specific
     #GenericError : GenericError;
     //validated
@@ -404,6 +557,8 @@ module {
   /// Represents a callback function type that notifiers will implement to be alerted to publication registration.
   public type PublicationRegisteredListener = <system>(PublicationRecord, trxid: Nat) -> ();
 
+  public type PublicationDeletedListener = <system>(PublicationRecord, trxid: Nat) -> ();
+
   /// `Subscription Registered Listener`
   ///
   /// Represents a callback function type that notifiers will implement to be alerted to subscription registration.
@@ -421,6 +576,8 @@ module {
   public type CanAddSubscription = ?((caller: Principal, subscription: SubscriptionRegistration) -> async* Star.Star<SubscriptionRegistration, SubscriptionRegisterError>);
 
   public type CanUpdatePublication = ?((caller: Principal, publicationSettings: PublicationUpdateRequest) -> async* Star.Star<PublicationUpdateRequest, PublicationRegisterError>);
+
+  public type CanDeletePublication = ?((caller: Principal, publicationSettings: PublicationDeleteRequest) -> async* Star.Star<PublicationDeleteRequest, PublicationRegisterError>);
 
   public type CanUpdateSubscription = ?((caller: Principal, publicationSettings: SubscriptionUpdateRequest) -> async* Star.Star<SubscriptionUpdateRequest, SubscriptionRegisterError>);
 
@@ -453,7 +610,7 @@ module {
       filter = "icrc72:subscription:filter";
       filter_update = "icrc72:subscription:filter:update";
       filter_remove = "icrc72:subscription:filter:remove";
-      bActive = "icrc72:subscription:bActive";
+      bStopped = "icrc72:subscription:bStopped";
       skip = "icrc72:subscription:skip";
       skip_update = "icrc72:subscription:skip:update";
       skip_remove = "icrc72:subscription:skip:remove";
@@ -544,6 +701,19 @@ module {
   public type InitArgs = {
     name : Text;
   };
+
+  public type Stats = {
+    tt : TT.Stats;
+    icrc72Publisher : ICRC72Publisher.Stats;
+    publications: [(Nat, PublicationRecordShared)];
+    subscriptions: [(Nat, SubscriptionRecordShared)];
+    broadcasters: [(Principal, BroadcasterRecordShared)];
+    nextPublicationID: Nat;
+    nextSubscriptionID: Nat;
+    defaultTake: Nat;
+    maxTake: Nat;
+  };
+
   public type Environment = {
     addRecord: ?(([(Text, Value)], ?[(Text,Value)]) -> Nat);
     tt: TT.TimerTool;

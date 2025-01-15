@@ -223,6 +223,39 @@ module {
     slice: [OrchestrationQuerySlice];
   };
 
+  public type PublicationDeleteRequest = {
+    memo: ?Blob;
+    publication: PublicationIdentifier;
+  };
+
+  public type PublicationDeleteResult = ?{
+    #Ok: Bool;
+    #Err: PublicationDeleteError;
+  };
+
+  public type SubscriptionDelete = {
+    memo: Blob;
+    subscription: SubscriptionIdentifier;
+  };
+
+  public type SubscriptionDeleteResult = ?{
+    #Ok: Bool;
+    #Err: SubscriptionDeleteError;
+  };
+
+  public type PublicationDeleteError = {
+    #Unauthorized; //generally unauthorized
+    #GenericError: GenericError;
+    #NotFound;
+    #GenericBatchError : Text;
+  };
+
+  public type SubscriptionDeleteError = {
+    #Unauthorized; //generally unauthorized
+    #GenericError: GenericError;
+    #GenericBatchError : Text;
+  };
+
   public type Service = actor {
     icrc72_register_subscription: ([SubscriptionRegistration]) -> async [SubscriptionRegisterResult];
     icrc72_register_publication: ([PublicationRegistration]) -> async [PublicationRegisterResult];
@@ -242,6 +275,9 @@ module {
       prev: ?Nat;
       filter: ?OrchestrationFilter;
     }) -> async [SubscriberInfo];
+    icrc72_update_publication: ([PublicationUpdateRequest]) -> async [PublicationUpdateResult];
+    icrc72_update_subscription: ([SubscriptionUpdateRequest]) -> async [SubscriptionUpdateResult];
+    icrc72_delete_publication: ([PublicationDeleteRequest]) -> async [PublicationDeleteResult];
   };
   
   

@@ -1,5 +1,5 @@
 import MigrationTypes "migrations/types";
-import Migration "migrations";
+import MigrationLib "migrations";
 import Service "service";
 import BTree "mo:stableheapbtreemap/BTree";
 import Map "mo:map/Map";
@@ -18,8 +18,11 @@ import Nat "mo:base/Nat";
 import Conversion = "mo:candy/conversion";
 import Candy = "mo:candy/types";
 import ICRC72Publisher = "../../icrc72-publisher.mo/src/";
+import ClassPlusLib "../../../../ICDevs/projects/ClassPlus/src/";
 
 module {
+
+  public let Migration = MigrationLib;
 
   public type State = MigrationTypes.State;
 
@@ -33,16 +36,26 @@ module {
   public type ICRC16Map = MigrationTypes.Current.ICRC16Map;
   public type Namespace = MigrationTypes.Current.Namespace;
   public type PublicationRecord = MigrationTypes.Current.PublicationRecord;
+  public type PublicationRecordShared = MigrationTypes.Current.PublicationRecordShared;
+  public let publicationRecordToShared = MigrationTypes.Current.publicationRecordToShared;
   public type SubscriptionRecord = MigrationTypes.Current.SubscriptionRecord;
+  public type SubscriptionRecordShared = MigrationTypes.Current.SubscriptionRecordShared;
+  public let subscriptionRecordToShared = MigrationTypes.Current.subscriptionRecordToShared;
   public type BroadcasterRecord = MigrationTypes.Current.BroadcasterRecord;
+  public type BroadcasterRecordShared = MigrationTypes.Current.BroadcasterRecordShared;
+  public let broadcasterRecordToShared = MigrationTypes.Current.broadcasterRecordToShared;
   public type SubscriberRecord = MigrationTypes.Current.SubscriberRecord;
+  public type SubscriberRecordShared = MigrationTypes.Current.SubscriberRecordShared;
+  public let subscriberRecordToShared = MigrationTypes.Current.subscriberRecordToShared;
   
               
   public type CanAddPublication = MigrationTypes.Current.CanAddPublication;
   public type CanAddSubscription = MigrationTypes.Current.CanAddSubscription;
   public type CanUpdatePublication = MigrationTypes.Current.CanUpdatePublication;
+  public type CanDeletePublication = MigrationTypes.Current.CanDeletePublication;
   public type CanUpdateSubscription = MigrationTypes.Current.CanUpdateSubscription;
   public type PublicationRegisteredListener = MigrationTypes.Current.PublicationRegisteredListener;
+  public type PublicationDeletedListener = MigrationTypes.Current.PublicationDeletedListener;
   public type SubscriptionRegisteredListener = MigrationTypes.Current.SubscriptionRegisteredListener;
   public type SubscriberRegisteredListener = MigrationTypes.Current.SubscriberRegisteredListener;
   public type ICRC75Item = MigrationTypes.Current.ICRC75Item;
@@ -59,6 +72,9 @@ module {
   public type SubscriptionRegisterResult = Service.SubscriptionRegisterResult;
   public type SubscriptionRegisterError = Service.SubscriptionRegisterError;
 
+  public type PublicationDeleteRequest = Service.PublicationDeleteRequest;
+  public type PublicationDeleteResult = Service.PublicationDeleteResult;
+
   public type SubscriptionUpdateRequest = Service.SubscriptionUpdateRequest;
   public type SubscriptionUpdateResult = Service.SubscriptionUpdateResult;
   public type SubscriptionUpdateError = Service.SubscriptionUpdateError;
@@ -74,6 +90,7 @@ module {
   public type SubscriptionIdentifier = Service.SubscriptionIdentifier;
   public type ValidBroadcastersResponse = Service.ValidBroadcastersResponse;
   public type InitArgs = MigrationTypes.Current.InitArgs;
+  public type Stats = MigrationTypes.Current.Stats;
 
   
   public let init = Migration.migrate;
@@ -95,12 +112,57 @@ module {
 
   type ConfigMap  = Map.Map<Text, ICRC16>;
 
-  public class Orchestrator(stored: ?State, canister: Principal, environment: Environment){
+  public type ClassPlus = ClassPlusLib.ClassPlus<
+    Orchestrator, 
+    State,
+    InitArgs,
+    Environment>;
+
+  public func ClassPlusGetter(item: ?ClassPlus) : () -> Orchestrator {
+    ClassPlusLib.ClassPlusGetter<Orchestrator, State, InitArgs, Environment>(item);
+  };
+
+  public func Init<system>(config : {
+      manager: ClassPlusLib.ClassPlusInitializationManager;
+      initialState: State;
+      args : ?InitArgs;
+      pullEnvironment : ?(() -> Environment);
+      onInitialize: ?(Orchestrator -> async*());
+      onStorageChange : ((State) ->())
+    }) :()-> Orchestrator{
+
+      D.print("Orchestrator Init");
+      switch(config.pullEnvironment){
+        case(?val) {
+          D.print("pull environment has value");
+         
+        };
+        case(null) {
+          D.print("pull environment is null");
+        };
+      };  
+      ClassPlusLib.ClassPlus<system,
+        Orchestrator, 
+        State,
+        InitArgs,
+        Environment>({config with constructor = Orchestrator}).get;
+    };
+
+
+  public class Orchestrator(stored: ?State, caller: Principal, canister: Principal, args: ?InitArgs, environment_passed: ?Environment, storageChanged: (State) -> ()){
 
     let debug_channel = {
       var announce = true;
       var setup = true;
     };
+
+      public let environment = switch(environment_passed){
+      case(?val) val;
+      case(null) {
+        D.trap("Environment is required");
+      };
+    };
+
 
     public var governance = MigrationTypes.Current.governance;
 
@@ -115,6 +177,8 @@ module {
       };
     };
 
+    storageChanged(#v0_1_0(#data(state)));
+
     private func natNow(): Nat{Int.abs(Time.now())};
 
     public func isApprovedPublisher(caller: Principal, record: PublicationRecord) : async* Star.Star<Bool, GenericError>{
@@ -123,12 +187,18 @@ module {
 
       switch(record.allowedPublishers){
           case (?#allowed(allowedPublishers)) {
-            let ?foundCaller = Set.contains(allowedPublishers, phash, caller) else return #trappable(false);
-            #trappable(true);
+            debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: isApprovedPublisher allowedPublishers " # debug_show(Set.toArray(allowedPublishers)));
+            if(Set.has(allowedPublishers, phash, caller)){
+              return #trappable(true);
+            } else {
+              debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: isApprovedPublisher not allowedPublishers " # debug_show((caller, Set.toArray(allowedPublishers))));
+              return #trappable(false)
+            };
           };
           case (?#disallowed(disallowedPublishers)) {
-            let ?foundCaller = Set.contains(disallowedPublishers, phash, caller) else return #trappable(true);
-            #trappable(false);
+            if(Set.has(disallowedPublishers, phash, caller)){
+              return #trappable(false);
+            } else return #trappable(true);
           };
           case(?#allowed_icrc75(allowedSubscribers)) {
             let icrc75Service : ICRC75Service.Service = actor(Principal.toText(allowedSubscribers.principal));
@@ -159,12 +229,14 @@ module {
 
       switch(record.allowedSubscribers){
           case (?#allowed(allowedSubscribers)) {
-            let ?foundCaller = Set.contains(allowedSubscribers, phash, caller) else return #trappable(false);
-            #trappable(true);
+            if(Set.has(allowedSubscribers, phash, caller)){
+              return #trappable(true);
+            } else return #trappable(false);
           };
           case (?#disallowed(disallowedSubscribers)) {
-            let ?foundCaller = Set.contains(disallowedSubscribers, phash, caller) else return #trappable(true);
-            #trappable(false);
+            if(Set.has(disallowedSubscribers, phash, caller)){
+              return #trappable(false);
+            } else return #trappable(true);
           };
           case(?#allowed_icrc75(allowedSubscribers)) {
             let icrc75Service : ICRC75Service.Service = actor(Principal.toText(allowedSubscribers.principal));
@@ -246,7 +318,6 @@ module {
 
           debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: canAssignBroadcaster approved " # debug_show(approved));
           if(approved){
-            
             D.print(".    ORCHESTRATOR: candidParsed" # debug_show(params));
             let existingPublisher = switch(Map.get<Principal, PublisherRecord>(existing.registeredPublishers, Map.phash, params.canister)){
               case (?publisherRecord) publisherRecord;
@@ -426,7 +497,7 @@ module {
                   initialConfig = existingSubscription.initialConfig;
                   var stake = 0;
                   var filter = getSubFilter(configMap);
-                  var bActive = getSubActive(configMap);
+                  var bStopped = getSubStopped(configMap);
                   var skip = getSubSkip(configMap);
                   subscriber = params.canister;
                   var subnet = null;
@@ -564,7 +635,7 @@ module {
 
                 debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: assignBroadcasterToSubscriber foundNamespace " # debug_show(foundNamespace, params.canister, selectedBroadcaster));
 
-                //todo: 72SubscritionAssign
+                //todo: 72SubscriptionAssign
                 Set.add(foundNamespace.0, phash, params.canister);
                 ignore BTree.insert(foundNamespace.1, Nat.compare, existingSubscriber.stake, params.canister);
                 Set.add(existingSubscriber.registeredBroadcasters, Set.phash, selectedBroadcaster);
@@ -762,18 +833,34 @@ module {
           case (?existing) {
         
             //todo: do we want to make sure the type matches? someone could add a bunch of timers here...we will need to add a cool down
-            //this publicatin exists, but a new publisher is registering it so we may need to assign a brodcaster and let them know...but we need to know they have permissions, so we'll set that up via the timer tool.
+            //this publication exists, but a new publisher is registering it so we may need to assign a braodcaster and let them know...but we need to know they have permissions, so we'll set that up via the timer tool.
             debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: Publication Registered setting canAssign Broadcaster for existing: " # debug_show((existing.id, caller)));
 
             //todo: we need this to run inline
 
-            ignore await* canAssignBroadcaster({id = 0; time=0},{aSync = null; actionType = CONST.publication.actions.canAssignBroadcaster;
+            let result = await* canAssignBroadcaster({id = 0; time=0},{aSync = null; actionType = CONST.publication.actions.canAssignBroadcaster;
               params= to_candid({id = existing.id; canister = caller;} );
               retries = 0;} );
 
             //todo: figure out why we can't do this async...may need event system
             /* ignore environment.tt.setActionASync<system>(natNow(), {actionType = CONST.publication.actions.canAssignBroadcaster; params= to_candid({id = existing.id; canister = caller;})}, ONE_MINUTE * 5);
             results.add(?#Ok(existing.id)); */
+
+            switch(result){
+              case (#awaited(id)) {
+                results.add(?#Ok(existing.id));
+              };
+              case (#trappable(id)) {
+                results.add(?#Ok(existing.id));
+              };
+              case (#err(#awaited(err))) {
+                results.add(?#Err(#UnauthorizedPublisher({namespace = existing.namespace})));
+              };
+              case (#err(#trappable(err))) {
+                results.add(?#Err(#UnauthorizedPublisher({namespace = existing.namespace})));
+              };
+            };
+
 
             continue proc;
           
@@ -886,6 +973,12 @@ module {
       return await* update_publication(caller, request, null);
     };
 
+    public func icrc72_delete_publication(caller: Principal, request:[PublicationDeleteRequest]) : async* [PublicationDeleteResult]{
+      //todo: security check
+
+      return await* delete_publication(caller, request, null);
+    };
+
     public func update_publication<system>(caller: Principal, request:[PublicationUpdateRequest], canUpdatePublication: CanUpdatePublication) : async* [PublicationUpdateResult]{
 
       debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: update_publication  from orchestrator" # debug_show(request));
@@ -917,8 +1010,8 @@ module {
         switch(existing){
           case (?existing) {
             //make sure we are a controller
-            switch(Set.contains<Principal>(existing.controllers, Set.phash, caller)){
-              case(?val){
+            if(Set.has<Principal>(existing.controllers, Set.phash, caller)){
+             
 
                 let parsedItem : PublicationUpdateRequest = switch(canUpdatePublication){
                   case (?interceptor) {
@@ -1518,15 +1611,93 @@ module {
                 for(listener in publicationRegisteredListeners.vals()){
                   listener.1<system>(existing, trxid);
                 };
-              };
-              case(null) {
+              } else {
                 results.add(?#Err(#Unauthorized));
                 continue proc;
               };
             
 
             
+          };
+         
+          case (null) {
+            results.add(?#Err(#NotFound));
+            continue proc;
+          };
+        };
+      };
+
+      return Buffer.toArray(results);
+    };
+
+    public func delete_publication<system>(caller: Principal, request:[PublicationDeleteRequest], canDeletePublication: CanDeletePublication) : async* [PublicationDeleteResult]{
+
+      debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: delete_publication  from orchestrator" # debug_show(request));
+
+      let results = Buffer.Buffer<PublicationDeleteResult>(1);
+
+      label proc for(thisItem : PublicationDeleteRequest  in request.vals()){
+        
+        //see if we already have the publication
+        let existing = switch(thisItem.publication){
+          case(#namespace(val)){
+            switch(BTree.get(state.publicationsByNamespace, Text.compare, val)){
+              case(null) null;
+              case(?existing) switch(BTree.get(state.publications, Nat.compare,existing)){
+                case(null) null;
+                case(?existing) ?existing;
+              };
             };
+          };
+          case(#publicationId(val)){
+            switch(BTree.get(state.publications, Nat.compare, val)){
+              case(null) null;
+              case(?existing) ?existing;
+            };
+          };
+        };
+
+        
+        switch(existing){
+          case (?existing) {
+            //make sure we are a controller
+            if(Set.has<Principal>(existing.controllers, Set.phash, caller)){
+             
+
+                let trxid = switch(environment.addRecord){
+                  case (?addRecord) {
+                    //todo: calculate value of blocks
+                    let txtop = Buffer.fromIter<(Text, Value)>([("btype",#Text("72PubReg")),("ts", #Nat(Int.abs(Time.now())))].vals());
+                    let tx = Buffer.fromIter<(Text, Value)>([
+                      ("namespace", #Text(existing.namespace) : Value) : (Text,Value),
+                      ("config", Conversion.CandySharedToValue(#Map([("deleted", #Text("true"))]) : Candy.CandyShared): Value): (Text,Value),
+                      ("publicationId", #Nat(existing.id): Value ) : (Text,Value),
+                    ].vals());
+                    switch(thisItem.memo){
+                      case (?memo) {
+                        tx.add(("memo", #Blob(memo)));
+                      };
+                      case (null) {};
+                    };
+                    addRecord(Buffer.toArray(tx), ?Buffer.toArray(txtop));
+                  };
+                  case (null) 0;
+                };
+
+                ignore BTree.delete(state.publications, Nat.compare, existing.id);
+                ignore BTree.delete(state.publicationsByNamespace, Text.compare, existing.namespace);
+                //emit to any listeners
+                for(listener in publicationDeletedListeners.vals()){
+                  listener.1<system>(existing, trxid);
+                };
+              } else {
+                results.add(?#Err(#Unauthorized));
+                continue proc;
+              };
+            
+
+            
+            
           };
           case (null) {
             results.add(?#Err(#NotFound));
@@ -1583,7 +1754,7 @@ module {
         };
       };
 
-      ignore Set.add(idx, nhash, subscription.id);
+      Set.add(idx, nhash, subscription.id);
 
       ignore Map.put(subscription.subscribers, phash, subscriber.subscriber, subscriber);
 
@@ -1606,9 +1777,9 @@ module {
       ?filter
     };
 
-    private func getSubActive(configMap: ConfigMap) : Bool{
-      let ?#Text(active) = Map.get(configMap, thash, CONST.subscription.filter) else return true;
-      if(active == "false"){
+    private func getSubStopped(configMap: ConfigMap) : Bool{
+      let ?#Text(bStopped) = Map.get(configMap, thash, CONST.subscription.bStopped) else return false;
+      if(bStopped == "false"){
         false;
       } else {
         true;
@@ -1888,15 +2059,15 @@ module {
           case (?existing) {
             //make sure we are a controller or no controller 
             let bAuthorized = if(Set.size(existing.controllers) == 0){
-              caller == thisItem.subscriber;
+              ?caller == thisItem.subscriber;
             } else {
-              switch(Set.contains<Principal>(existing.controllers, Set.phash, caller)){
-                case(?val) val;
-                case(null) false;
-              };
+              if(Set.has<Principal>(existing.controllers, Set.phash, caller)){
+                true;
+              } else false;
+              
             };
-            switch(Set.contains<Principal>(existing.controllers, Set.phash, caller)){
-              case(?val){
+            if(Set.has<Principal>(existing.controllers, Set.phash, caller)){
+           
 
                 let parsedItem : SubscriptionUpdateRequest = switch(canUpdateSubscription){
                   case (?interceptor) {
@@ -2090,9 +2261,9 @@ module {
                       continue proc;
                   };
 
-                  ///MARK: skiprmv
+                  ///MARK: bActv
                   subscriber.skip := null;
-                } else if (parsedItem.config.0 == CONST.subscription.bActive){
+                } else if (parsedItem.config.0 == CONST.subscription.bStopped){
                   let ?subscriber = getSubscriberFromUpdate(parsedItem, existing) else {
                       results.add(?#Err(#GenericError({
                         error_code = 3001;
@@ -2101,7 +2272,7 @@ module {
                       continue proc;
                   };
 
-                  let active = switch(parsedItem.config.1){
+                  let bStopped = switch(parsedItem.config.1){
                     case(#Text(val)){
                       if(val == "true"){
                         true;
@@ -2112,13 +2283,13 @@ module {
                     case(_){
                       results.add(?#Err(#GenericError({
                         error_code = 0;
-                        message = "Invalid active";
+                        message = "Invalid bStopped";
                       })));
                       continue proc;
                     };
                   };
 
-                  subscriber.bActive := active;
+                  subscriber.bStopped := bStopped;
 
                   //todo: emit subscriber update
                 };
@@ -2159,15 +2330,14 @@ module {
                   };
                 };
                 
-              };
-              case(null) {
+              } else{
                 results.add(?#Err(#Unauthorized));
                 continue proc;
               };
             
 
             
-            };
+            
           };
           case (null) {
             results.add(?#Err(#NotFound));
@@ -2350,10 +2520,14 @@ module {
 
       let #awaited(subnet) = await* getSubnetForPrincipal(caller) else return #list([]);
 
+      debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: get_valid_broadcaster subnet " # debug_show(subnet));
+
       let validBroadcasters = switch(Map.get(state.broadcastersBySubnet, phash, subnet)){
         case (?val) val;
         case (null) return #list([]);
       };
+
+      debug if(debug_channel.announce) D.print(".    ORCHESTRATOR: get_valid_broadcaster validBroadcasters " # debug_show(validBroadcasters));
 
       return #list(Vector.toArray(validBroadcasters));
     };
@@ -2883,7 +3057,27 @@ module {
     };
 
     
-    
+    public func stats() : Stats{
+      
+      return {
+        tt = environment.tt.getStats();
+        icrc72Publisher = environment.icrc72Publisher.stats();
+        publications = Array.map<(Nat,PublicationRecord),(Nat, PublicationRecordShared)>(BTree.toArray(state.publications),(func((entry)) {
+          (entry.0, publicationRecordToShared(entry.1));
+        }));
+        
+        broadcasters = Array.map<(Principal,BroadcasterRecord),(Principal, BroadcasterRecordShared)>(BTree.toArray(state.broadcasters),(func((entry)) {
+          (entry.0, broadcasterRecordToShared(entry.1));
+        }));
+        subscriptions = Array.map<(Nat,SubscriptionRecord),(Nat, SubscriptionRecordShared)>(BTree.toArray(state.subscriptions),(func((entry)) {
+          (entry.0, subscriptionRecordToShared(entry.1));
+        }));
+        nextPublicationID = state.nextPublicationID;
+        nextSubscriptionID = state.nextSubscriptionID;
+        defaultTake = state.defaultTake;
+        maxTake = state.maxTake;
+      };
+    };
 
 
     ///MARK: Listeners
@@ -2891,6 +3085,8 @@ module {
     type Listener<T> = (Text, T);
 
     private let publicationRegisteredListeners = Buffer.Buffer<(Text, PublicationRegisteredListener)>(1);
+
+    private let publicationDeletedListeners = Buffer.Buffer<(Text, PublicationDeletedListener)>(1);
 
     private let subscriptionRegisteredListeners = Buffer.Buffer<(Text, SubscriptionRegisteredListener)>(1);
 
@@ -2926,6 +3122,10 @@ module {
     /// - `listeners`: The vector of existing listeners that the new listener will be added to or updated in.
     public func registerPublicationRegisteredListener(namespace: Text, remote_func : PublicationRegisteredListener){
       registerListener<PublicationRegisteredListener>(namespace, remote_func, publicationRegisteredListeners);
+    };
+
+    public func registerPublicationDeletedListener(namespace: Text, remote_func : PublicationDeletedListener){
+      registerListener<PublicationDeletedListener>(namespace, remote_func, publicationDeletedListeners);
     };
 
     public func registerSubscriptionRegisteredListener(namespace: Text, remote_func : SubscriptionRegisteredListener){
